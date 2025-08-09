@@ -48,8 +48,14 @@ func (r *room) run() {
 			//send a message to all clients in the room
 			case msg := <-r.forward:
 				for client := range r.clients {
-					//send the message to the client's receive channel
-					client.recieve <- msg
+					select {
+					case client.recieve <- msg:
+						// message sent successfully
+					default:
+						// client's receive channel is full or closed, remove client
+						delete(r.clients, client)
+						close(client.recieve)
+					}
 				}
 		}
 	}
@@ -72,6 +78,7 @@ func getRoom(name string) *room {
 	//create a new room if it doesn't exist
 	r := newRoom()
 	rooms[name] = r
+	go r.run() // Start the room's goroutine
 	return r
 }
 
@@ -83,13 +90,20 @@ const(
 	messageBufferSize = 256 // 1024 bytes
 )
 
-var upgrader = websocket.Upgrader{ReadBufferSize: socketBufferSize, WriteBufferSize: messageBufferSize}
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  socketBufferSize, 
+	WriteBufferSize: messageBufferSize,
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow connections from any origin (adjust for production)
+	},
+}
 
 // ServeHTTP implements the http.Handler interface
 func (r *room) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	roomName:=req.URL.Query().Get("room")
+	roomName := req.URL.Query().Get("room")
 	if roomName == "" {
 		http.Error(w, "Room name is required", http.StatusBadRequest)
+		return
 	}
 	realRoom := getRoom(roomName) //create a new room if it doesn't exist
 
@@ -97,7 +111,7 @@ func (r *room) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	socket, err := upgrader.Upgrade(w, req, nil)
 
 	if err != nil {
-		log.Fatal("ServeHTTP:", err)
+		log.Printf("ServeHTTP upgrade error: %v", err)
 		return
 	}
 
@@ -105,14 +119,14 @@ func (r *room) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	client := &client{
 		socket:  socket,
 		recieve: make(chan []byte, messageBufferSize),
-		room:    r,
+		room:    realRoom, // Use realRoom instead of r
 		name: fmt.Sprintf("User%d", rand.Intn(1000)), //assign a name to the client
 	}
 
 	realRoom.join <- client //add the client to the room
 
 	defer func() {
-		r.leave <- client //remove the client from the room when the function exits
+		realRoom.leave <- client //remove the client from the room when the function exits
 	}()
 
 	go client.write() //start writing messages to the client
