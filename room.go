@@ -6,109 +6,84 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
 type room struct {
-	// holds the clients that are connected to the room
+
+	//hold track of all connected clients
 	clients map[*client]bool
 
-	// join is a channel for clients to join the room
+	//join is a channel for clients to join the room
 	join chan *client
 
-	// leave is a channel for clients to leave the room
+	//leave is a channel for clients to leave the room
 	leave chan *client
 
-	// forward is a channel for messages to be forwarded to all clients in the room
+	//forward is a channel that holds incoming messages that should be sent to clients
 	forward chan []byte
-
-	// room name
-	name string
 }
 
-func newRoom(name string) *room {
+func newRoom() *room {
 	return &room{
 		forward: make(chan []byte),
-		join: make(chan *client),
-		leave: make(chan *client),
+		join:    make(chan *client),
+		leave:   make(chan *client),
 		clients: make(map[*client]bool),
-		name: name,
 	}
 }
 
-//function that will handle the user joining and leaving the room
+//each room is a separate thread that should run independently (but as long as the server is running)
 func (r *room) run() {
-	for{
+	for {
 		select{
-		// adding a user to a channel
-		case client := <-r.join:
-			r.clients[client] = true
-			log.Printf("Client joined room %s. Total clients: %d", r.name, len(r.clients))
+			// adding a user to a channel
+			case client := <-r.join:
+				r.clients[client] = true //add the client to the room
+			case client := <-r.leave:
+				delete(r.clients, client) //remove the client from the room
+				close(client.recieve) //close the client's receive channel
 
-		// removing a user from a channel
-		case client := <-r.leave:
-			delete(r.clients, client)
-			close(client.recieve)
-			log.Printf("Client left room %s. Total clients: %d", r.name, len(r.clients))
-
-		// sending a message to all clients in the room
-		case msg := <-r.forward:
-			log.Printf("Broadcasting message to %d clients in room %s", len(r.clients), r.name)
-			// Create a copy of clients to avoid modification during iteration
-			clientsToNotify := make([]*client, 0, len(r.clients))
-			for client := range r.clients {
-				clientsToNotify = append(clientsToNotify, client)
-			}
-			
-			for _, client := range clientsToNotify {
-				select {
-				case client.recieve <- msg:
-					// Message sent successfully
-				default:
-					// Channel is full or closed, remove the client
-					delete(r.clients, client)
-					close(client.recieve)
-					log.Printf("Removed client due to channel issue in room %s", r.name)
+			//send a message to all clients in the room
+			case msg := <-r.forward:
+				for client := range r.clients {
+					//send the message to the client's receive channel
+					client.recieve <- msg
 				}
-			}
 		}
 	}
 }
 
-// upgrade the http connection to a websocket connection
-
-const (
-	socketBufferSize = 1024
-	messageBufferSize = 256
+// upgrade a basic http connection to a websocket connection
+const(
+	// The maximum size of a message that can be received from the client
+	socketBufferSize = 1024 // 4 // 256 bytes
+	// The maximum size of a message that can be sent to the client
+	messageBufferSize = 256 // 1024 bytes
 )
-var upgrader = &websocket.Upgrader{
-	ReadBufferSize: socketBufferSize,
-	WriteBufferSize: messageBufferSize,
-}
 
-func (r *room) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	log.Printf("WebSocket upgrade request for room: %s", r.name)
-	
+var upgrader = websocket.Upgrader{ReadBufferSize: socketBufferSize, WriteBufferSize: messageBufferSize}
+
+func (r *room)ServerHttp(w http.ResponseWriter, req *http.Request) {
+	//upgrade the connection to a websocket connection
 	socket, err := upgrader.Upgrade(w, req, nil)
+
 	if err != nil {
-		log.Printf("WebSocket upgrade error: %v", err)
+		log.Fatal("ServerHTTP:", err)
 		return
 	}
-	
-	log.Printf("Client connected to room: %s", r.name)
-	
-	client := &client{
-		socket: socket,
-		recieve: make(chan []byte, messageBufferSize),
-		room: r,
-	}
-	
-	// Add client to room
-	r.join <- client
 
-	defer func() { 
-		log.Printf("Client disconnected from room: %s", r.name)
-		r.leave <- client 
+	//create a new client and add it to the room
+	client := &client{
+		socket:  socket,
+		recieve: make(chan []byte, messageBufferSize),
+		room:    r,
+	}
+
+	r.join <- client //add the client to the room
+
+	defer func() {
+		r.leave <- client //remove the client from the room when the function exits
 	}()
-	
-	// Start client goroutines
-	go client.read()
-	go client.write()
+
+	go client.write() //start writing messages to the client
+	client.read() //start reading messages from the client
 }

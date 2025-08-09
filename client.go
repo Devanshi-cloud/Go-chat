@@ -1,65 +1,44 @@
 package main
 
-import (
-	"encoding/json"
-	"log"
-	"github.com/gorilla/websocket"
-)
+import "github.com/gorilla/websocket"
 
-type message struct {
-	Name    string `json:"name"`
-	Message string `json:"message"`
-	Room    string `json:"room"`
-}
-
+// client represents a single connected client in the chat room.
 type client struct {
+	//a websocket connection for this client
 	socket *websocket.Conn
+
+	//recieve is a channel to receive messages from the client
 	recieve chan []byte
-	room *room
-	name string
+
+	room *room //the room this client is in
 }
 
-//close the connection when the client is disconnected
-func (c *client) read() {
-	//as long as the client is connected, read the message from the socket and forward it to the room
+//send messages function sends messages to the client.
+func (c *client) read(){
+
+	//close the connection when the function exits
+	defer c.socket.Close()
+
 	for{
-		_, msg,err := c.socket.ReadMessage()
-
+		//read message from the client as long as their is an input, forward it to the room
+		_, msg, err := c.socket.ReadMessage()
 		if err != nil {
-			log.Printf("Client read error: %v", err)
-			return
+			return //if there's an error, exit the loop
 		}
 
-		log.Printf("Received message from client: %s", string(msg))
-
-		// Parse the message as JSON
-		var messageData message
-		if err := json.Unmarshal(msg, &messageData); err != nil {
-			// If not JSON, treat as plain text
-			messageData = message{
-				Name:    c.name,
-				Message: string(msg),
-				Room:    c.room.name,
-			}
-		}
-
-		// Set the client name if not set
-		if c.name == "" {
-			c.name = messageData.Name
-		}
-
-		// Forward the message to the room (excluding the sender)
+		//forward the message to the room's forward channel
 		c.room.forward <- msg
 	}
 }
 
-// used to recieved messages
+//used to recieve messages from the room and send them to the client
 func (c *client) write() {
 	defer c.socket.Close()
+
 	for msg := range c.recieve {
-		err := c.socket.WriteMessage(websocket.TextMessage, msg)
+		err:=c.socket.WriteMessage(websocket.TextMessage, msg)
 		if err != nil {
-			return
+			return //if there's an error, exit the loop
 		}
 	}
 }
