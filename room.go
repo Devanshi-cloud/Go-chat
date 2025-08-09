@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
+	"sync"
 
 	"github.com/gorilla/websocket"
 )
@@ -52,6 +55,26 @@ func (r *room) run() {
 	}
 }
 
+// getRoom retrieves a room by name or creates a new one if it doesn't exist
+var rooms = make(map[string]*room)
+var mu sync.Mutex // mutex to protect the rooms map
+
+func getRoom(name string) *room {
+
+	// prevent creating a room with an same name when multiple users do that at the same time
+
+	mu.Lock()
+	defer mu.Unlock()
+	if r, ok := rooms[name]; ok {
+		return r //return the existing room
+	}
+
+	//create a new room if it doesn't exist
+	r := newRoom()
+	rooms[name] = r
+	return r
+}
+
 // upgrade a basic http connection to a websocket connection
 const(
 	// The maximum size of a message that can be received from the client
@@ -62,12 +85,19 @@ const(
 
 var upgrader = websocket.Upgrader{ReadBufferSize: socketBufferSize, WriteBufferSize: messageBufferSize}
 
-func (r *room)ServerHttp(w http.ResponseWriter, req *http.Request) {
+// ServeHTTP implements the http.Handler interface
+func (r *room) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	roomName:=req.URL.Query().Get("room")
+	if roomName == "" {
+		http.Error(w, "Room name is required", http.StatusBadRequest)
+	}
+	realRoom := getRoom(roomName) //create a new room if it doesn't exist
+
 	//upgrade the connection to a websocket connection
 	socket, err := upgrader.Upgrade(w, req, nil)
 
 	if err != nil {
-		log.Fatal("ServerHTTP:", err)
+		log.Fatal("ServeHTTP:", err)
 		return
 	}
 
@@ -76,9 +106,10 @@ func (r *room)ServerHttp(w http.ResponseWriter, req *http.Request) {
 		socket:  socket,
 		recieve: make(chan []byte, messageBufferSize),
 		room:    r,
+		name: fmt.Sprintf("User%d", rand.Intn(1000)), //assign a name to the client
 	}
 
-	r.join <- client //add the client to the room
+	realRoom.join <- client //add the client to the room
 
 	defer func() {
 		r.leave <- client //remove the client from the room when the function exits

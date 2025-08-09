@@ -1,6 +1,11 @@
 package main
 
-import "github.com/gorilla/websocket"
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/gorilla/websocket"
+)
 
 // client represents a single connected client in the chat room.
 type client struct {
@@ -11,6 +16,8 @@ type client struct {
 	recieve chan []byte
 
 	room *room //the room this client is in
+
+	name string //the name of the client
 }
 
 //send messages function sends messages to the client.
@@ -27,8 +34,18 @@ func (c *client) read(){
 		}
 
 		//forward the message to the room's forward channel
-		c.room.forward <- msg
+		outgoing := map[string]interface{}{
+			"name": c.name,
+			"message": string(msg),
 	}
+
+	jsMessage, err := json.Marshal(outgoing)
+		if err != nil {
+			fmt.Println("Error marshalling message:", err)
+			continue //skip this iteration if there's an error
+}
+		c.room.forward <- jsMessage //send the message to the room's forward channel
+}
 }
 
 //used to recieve messages from the room and send them to the client
