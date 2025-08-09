@@ -7,7 +7,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 type room struct {
-
 	// holds the clients that are connected to the room
 	clients map[*client]bool
 
@@ -19,14 +18,18 @@ type room struct {
 
 	// forward is a channel for messages to be forwarded to all clients in the room
 	forward chan []byte
+
+	// room name
+	name string
 }
 
-func newRoom() *room {
+func newRoom(name string) *room {
 	return &room{
 		forward: make(chan []byte),
 		join: make(chan *client),
 		leave: make(chan *client),
 		clients: make(map[*client]bool),
+		name: name,
 	}
 }
 
@@ -65,9 +68,12 @@ var upgrader = &websocket.Upgrader{
 func (r *room) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	socket, err := upgrader.Upgrade(w, req, nil)
 	if err != nil {
-		log.Fatal("ServeHTTP:", err)
+		log.Printf("WebSocket upgrade error: %v", err)
 		return
 	}
+	
+	log.Printf("Client connected to room: %s", r.name)
+	
 	client := &client{
 		socket: socket,
 		recieve: make(chan []byte, messageBufferSize),
@@ -75,8 +81,10 @@ func (r *room) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	r.join <- client
 
-	defer func() { r.leave <- client }()
+	defer func() { 
+		log.Printf("Client disconnected from room: %s", r.name)
+		r.leave <- client 
+	}()
 	go client.read()
 	go client.write()
-
 }
