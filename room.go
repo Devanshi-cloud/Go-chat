@@ -40,15 +40,27 @@ func (r *room) run() {
 		// adding a user to a channel
 		case client := <-r.join:
 			r.clients[client] = true
+			log.Printf("Client joined room %s. Total clients: %d", r.name, len(r.clients))
 
 		// removing a user from a channel
 		case client := <-r.leave:
 			delete(r.clients, client)
 			close(client.recieve)
+			log.Printf("Client left room %s. Total clients: %d", r.name, len(r.clients))
+
 		// sending a message to all clients in the room
 		case msg := <-r.forward:
+			log.Printf("Broadcasting message to %d clients in room %s", len(r.clients), r.name)
 			for client := range r.clients {
-				client.recieve <- msg
+				select {
+				case client.recieve <- msg:
+					// Message sent successfully
+				default:
+					// Channel is full or closed, remove the client
+					delete(r.clients, client)
+					close(client.recieve)
+					log.Printf("Removed client due to channel issue in room %s", r.name)
+				}
 			}
 		}
 	}
