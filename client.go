@@ -48,7 +48,7 @@ func (c *client) read() {
 			c.name = messageData.Name
 		}
 
-		// Forward the message to the room
+		// Forward the message to the room (excluding the sender)
 		c.room.forward <- msg
 	}
 }

@@ -51,7 +51,13 @@ func (r *room) run() {
 		// sending a message to all clients in the room
 		case msg := <-r.forward:
 			log.Printf("Broadcasting message to %d clients in room %s", len(r.clients), r.name)
+			// Create a copy of clients to avoid modification during iteration
+			clientsToNotify := make([]*client, 0, len(r.clients))
 			for client := range r.clients {
+				clientsToNotify = append(clientsToNotify, client)
+			}
+			
+			for _, client := range clientsToNotify {
 				select {
 				case client.recieve <- msg:
 					// Message sent successfully
@@ -78,6 +84,8 @@ var upgrader = &websocket.Upgrader{
 }
 
 func (r *room) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	log.Printf("WebSocket upgrade request for room: %s", r.name)
+	
 	socket, err := upgrader.Upgrade(w, req, nil)
 	if err != nil {
 		log.Printf("WebSocket upgrade error: %v", err)
@@ -91,12 +99,16 @@ func (r *room) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		recieve: make(chan []byte, messageBufferSize),
 		room: r,
 	}
+	
+	// Add client to room
 	r.join <- client
 
 	defer func() { 
 		log.Printf("Client disconnected from room: %s", r.name)
 		r.leave <- client 
 	}()
+	
+	// Start client goroutines
 	go client.read()
 	go client.write()
 }

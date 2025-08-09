@@ -25,14 +25,6 @@ const socket = new WebSocket(`ws://${location.host}/room?room=${room}`);
 socket.onopen = function(event) {
   console.log('Connected to chat room:', room);
   addSystemMessage('Connected to chat room: ' + room);
-  
-  // Send initial connection message
-  const messageData = {
-    name: username,
-    message: "joined the room",
-    room: room
-  };
-  socket.send(JSON.stringify(messageData));
 };
 
 socket.onclose = function(event) {
